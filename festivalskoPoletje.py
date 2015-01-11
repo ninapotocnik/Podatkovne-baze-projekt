@@ -3,10 +3,10 @@ import hashlib
 
 datoteka_baze = 'festivalskoPoletje.sqlite3'
 
-def iskanje(ime = None, lokacija = None, min_cena = None, max_cena = None, min_datumZ = None, max_datumZ = None, min_datumK = None, max_datumK = None):
+def iskanje(ime = '', lokacija = '', min_cena = 30, max_cena = 1000, min_datumZ = '1.5.2014', max_datumZ = '1.9.2014', min_datumK = '3.5.2014', max_datumK = '30.9.2014'):
     cur = baza.cursor()
     cur.execute('''SELECT festival.id, festival.ime FROM festival JOIN nastopi ON festival.id = nastopi.id_festival
-              JOIN glasbeniki ON nastopi.id_glasbenik = glasbeniki.id
+              JOIN glasbeniki ON nastopi.id_glasbenik = id
               WHERE (festival.ime LIKE ? OR glasbeniki.glasbenik LIKE ?)
               AND festival.lokacija LIKE ?
               AND festival.cena BETWEEN ? AND ?
@@ -19,7 +19,6 @@ def iskanje(ime = None, lokacija = None, min_cena = None, max_cena = None, min_d
 
 def izdaj_vstopnico_festival(id_festival, kolicina, popust = 0):
     # popust je v odstotkih
-    #with baza:
     cur = baza.cursor()
     cur.execute('''SELECT stevilo_vstopnic, st_prodanih_festival FROM festival WHERE id = ?
               ''', [id_festival])
@@ -46,6 +45,10 @@ def izdaj_vstopnico_festival(id_festival, kolicina, popust = 0):
     else:
         st_prodanih_nastop = rez1[0]
 
+    # če še nimamo nobene prodane vstopnice, potem None pretvorimo v 0, da lahko računamo
+    if st_prodanih_nastop == None:
+        st_prodanih_nastop = 0
+
     # preštejemo število nastopov na festivalu, za katerega izdajamo vstopnico
     cur.execute('''SELECT COUNT(id) FROM nastopi WHERE id_festival = ?
               ''', [id_festival])
@@ -68,10 +71,11 @@ def izdaj_vstopnico_festival(id_festival, kolicina, popust = 0):
     if st_prodanih_nastop == st_nastopov:
         cena_skupaj = cena * kolicina * (1 - popust/100) * popust_zaradi_nastopa
         # vstopnica je prodana
-        cur.execute('''INSERT INTO Vstopnice (cena_prej, popust, cena_skupaj, id_festival,  ime, kolicina)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)''', [cena, popust, cena_skupaj, id_festival, kolicina])
+        cur.execute('''INSERT INTO Vstopnice (id_festivala, ime_festivala, kolicina, cena_prej, cena_skupaj, popust)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)''', [id_festival, ime_festivala, kolicina, cena, cena_skupaj, popust])
         # odštejejo se kupljene vstopnice
-        cur.execute('''UPDATE festival SET stevilo_vstopnic = ?''', [st_prodanih_festival + kolicina])
+        cur.execute('''UPDATE festival SET st_prodanih_festival = ?''', [st_prodanih_festival + kolicina])
+
     if stevilo_vstopnic >= kolicina:
         cena_skupaj = cena * kolicina * (1 - popust/100)
         # vstopnica je prodana
@@ -82,34 +86,56 @@ def izdaj_vstopnico_festival(id_festival, kolicina, popust = 0):
     cur.close()
     return id
 
-def izdaj_vstopnico_nastopi(id_nastopa, kolicina, popust = 0):
+def izdaj_vstopnico_nastop(id_nastopa, kolicina, popust = 0):
     # popust je v odstotkih
-    with baza:
-        baza.execute('''SELECT st_prodanih_nastop, st_vstopnic_na_voljo FROM nastopi WHERE id = ?
-                  ''', [id_nastopa])
-        rez = baza.fetchone()
-        if rez is None:
-            raise Exception("Ni tega nastopa.")
-        else:
-            (st_prodanih_nastop, st_vstopnic_na_voljo) = rez
+    cur = baza.cursor()
+    # prodane vstopnice in id festivala, da lahko dobimo koliko je vseh vstopnic
+    cur.execute('''SELECT st_prodanih_nastop, id_festival FROM nastopi WHERE id = ?
+              ''', [id_nastopa])
+    rez = cur.fetchone()
 
-        baza.execute('''SELECT st_prodanih_festival FROM festival WHERE id = ?
-                  ''', [id_festival])
-        re1 = baza.fectone()
-        if rez1 is None:
-            raise Exception('Ni tega festivala.')
-        else:
-            st_prodanih_festival = rez1
-        
-        if st_prodanih_festival + st_prodanih_nastopi + kolicina <= st_vstopnic_na_voljo:
-            cena_skupaj = cena * kolicina * (1 - popust/100)
-            # vstopnica je prodana
-            baza.execute('''INSERT INTO vstopnica_nastopi (cena_prej, popust, cena_skupaj, nastop_id, stevilo)
-                            VALUES (?, ?, ?, ?, ?)''', [cena, popust, cena_skupaj, id_nastopa, kolicina])
-            # odštejejo se kupljene vstopnice
-            baza.execute('''UPDATE nastopi SET stevilo_vstopnic = ?''', [st_prodanih_nastop + kolicina])
+    if rez is None:
+        raise Exception("Ni tega nastopa.")
+    else:
+        (st_prodanih_nastop, id_festival) = rez
 
-        return id
+    st_prodanih_nastop = rez[0]
+    id_festival = rez[1]
+
+    # koliko je vseh vstopnic
+    cur.execute('''SELECT stevilo_vstopnic FROM festival WHERE id = ?''', [id_festival])
+    rez1 = cur.fetchone()
+
+    stevilo_vstopnic = rez1[0]
+
+    cur.execute('''SELECT st_prodanih_festival FROM festival WHERE id = ?
+              ''', [id_nastopa])
+    rez2 = cur.fetchone()
+    if rez2 is None:
+        raise Exception('Ni tega festivala.')
+    else:
+        st_prodanih_festival = rez2[0]
+
+    # preštejemo število nastopov na festivalu, za katerega izdajamo vstopnico
+    cur.execute('''SELECT COUNT(id) FROM nastopi WHERE id_festival = ?
+              ''', [id_festival])
+    st_nastopov = cur.fetchone()
+    st_nastopov = st_nastopov[0]
+
+    # cena festivala za katerega izdajamo vstopnico
+    cur.execute('''SELECT cena FROM festival WHERE id = ?''', [id_festival])
+    rez3 = cur.fetchone()
+    cena = rez3[0]/ st_nastopov
+    
+    if st_prodanih_festival + st_prodanih_nastop + kolicina <= stevilo_vstopnic:
+        cena_skupaj = cena * kolicina * (1 - popust/100)
+        # vstopnica je prodana
+        cur.execute('''INSERT INTO vstopnice_nastopi (cena_prej, popust, cena_skupaj, id_nastop, stevilo)
+                        VALUES (?, ?, ?, ?, ?)''', [cena, popust, cena_skupaj, id_nastopa, kolicina])
+        # prištejejo se kupljene vstopnice
+        cur.execute('''UPDATE nastopi SET st_prodanih_nastop = ?''', [st_prodanih_nastop + kolicina])
+    cur.close()
+    return id
 
 
 def zakodiraj(geslo):
