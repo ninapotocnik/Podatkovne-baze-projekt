@@ -1,22 +1,41 @@
 import sqlite3
 import hashlib
-
-# iskanje??
+import datetime
 
 datoteka_baze = 'festivalskoPoletje.sqlite3'
 
-def iskanje(ime = '', lokacija = '', min_cena = 30, max_cena = 1000, min_datumZ = '1.5.2014', max_datumZ = '1.9.2014', min_datumK = '3.5.2014', max_datumK = '30.9.2014'):
+def iskanje(ime = '', lokacija = '', min_cena = 30, max_cena = 1000, min_datum = None, max_datum = None):
     '''Poišče festival glede na podane zahteve.'''
     cur = baza.cursor()
-    cur.execute('''SELECT festival.id, festival.ime FROM festival JOIN nastopi ON festival.id = nastopi.id_festival
-              JOIN glasbeniki ON nastopi.id_glasbenik = glasbenik.id
+    sql = '''SELECT festival.id, festival.ime FROM festival JOIN nastopi ON festival.id = nastopi.id_festival
+              JOIN glasbeniki ON nastopi.id_glasbenik = glasbeniki.id
               WHERE (festival.ime LIKE ? OR glasbeniki.glasbenik LIKE ?)
               AND festival.lokacija LIKE ?
-              AND festival.cena BETWEEN ? AND ?
-              AND festival.datum_zacetek BETWEEN ? AND ?
-              AND festival.datum_konec BETWEEN ? AND ?
-              ''', [ime, ime, lokacija, min_cena, max_cena, min_datumZ, max_datumZ, min_datumK, max_datumK])
-    rezultat_iskanja = cur.fetchall()
+              AND festival.cena BETWEEN ? AND ?'''
+    podatki = ['%'+ ime + '%', '%' + ime + '%', '%' + lokacija + '%', min_cena, max_cena]
+    if min_datum is not None:
+        sql += " AND festival.datum_zacetek > ?"
+        podatki += [min_datum]
+    if max_datum is not None:
+        sql += " AND festival.datum_konec < ?"
+        podatki += [max_datum]
+
+    cur.execute(sql, podatki)
+    rez_iskanja = cur.fetchall()
+
+    # da se zadetki ne ponavljajo
+    rezultat_iskanja = []
+    # če se ponavljajo
+    for i in range(len(rez_iskanja) - 1):
+        if rez_iskanja[i] != rez_iskanja[i+1]:
+            rezultat_iskanja.append(rez_iskanja[i])
+    # če ni nobenega zadetka
+    if len(rez_iskanja) == 0:
+        rezultat_iskanja = []
+    # če so vsi zadetki enaki
+    else:
+        rezultat_iskanja.append(rez_iskanja[len(rez_iskanja)-1])
+
     cur.close()
     return rezultat_iskanja
 
@@ -76,7 +95,7 @@ def izdaj_vstopnico_festival(id_festival, kolicina, popust = 0):
         cena_skupaj = cena * kolicina * (1 - popust/100) * popust_zaradi_nastopa
         # vstopnica je prodana
         cur.execute('''INSERT INTO Vstopnice (id_festivala, ime_festivala, kolicina, cena_prej, cena_skupaj, popust)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)''', [id_festival, ime_festivala, kolicina, cena, cena_skupaj, popust])
+                        VALUES (?, ?, ?, ?, ?, ?)''', [id_festival, ime_festivala, kolicina, cena, cena_skupaj, popust])
         # odštejejo se kupljene vstopnice
         cur.execute('''UPDATE festival SET st_prodanih_festival = ?''', [st_prodanih_festival + kolicina])
 
@@ -107,6 +126,9 @@ def izdaj_vstopnico_nastop(id_nastopa, kolicina, popust = 0):
     st_prodanih_nastop = rez[0]
     id_festival = rez[1]
 
+    if st_prodanih_nastop == None:
+        st_prodanih_nastop = 0
+
     # koliko je vseh vstopnic
     cur.execute('''SELECT stevilo_vstopnic FROM festival WHERE id = ?''', [id_festival])
     rez1 = cur.fetchone()
@@ -121,14 +143,17 @@ def izdaj_vstopnico_nastop(id_nastopa, kolicina, popust = 0):
     else:
         st_prodanih_festival = rez2[0]
 
+    if st_prodanih_festival == None:
+        st_prodanih_festival = 0
+
     # preštejemo število nastopov na festivalu, za katerega izdajamo vstopnico
     cur.execute('''SELECT COUNT(id) FROM nastopi WHERE id_festival = ?
-              ''', [id_festival])
+              ''', [id_nastopa])
     st_nastopov = cur.fetchone()
     st_nastopov = st_nastopov[0]
 
     # cena festivala za katerega izdajamo vstopnico
-    cur.execute('''SELECT cena FROM festival WHERE id = ?''', [id_festival])
+    cur.execute('''SELECT cena FROM festival WHERE id = ?''', [id_nastopa])
     rez3 = cur.fetchone()
     cena = rez3[0]/ st_nastopov
     
@@ -149,11 +174,12 @@ def zakodiraj(geslo):
 
 def preveri_geslo(uporabnisko_ime, geslo):
     '''Preverimo, če je v bazi uporabnik s podanim uporabniškim imenom in geslom'''
-    with baza:
-        baza.execute('''SELECT id FROM uporabniki WHERE uporabnisko_ime = ? AND geslo = ?''', [uporabnisko_ime, zakodiraj(geslo)])
-        id_uporabnika = baza.fetchone()
-        if id_uporabnika is None: 
-            raise Exception('Vnešeno uporabniško ime ali geslo je napačno.')
+    cur = baza.cursor()
+    cur.execute('''SELECT id FROM uporabniki WHERE uporabnisko_ime = ? AND geslo = ?''', [uporabnisko_ime, zakodiraj(geslo)])
+    id_uporabnika = cur.fetchone()
+    if id_uporabnika is None: 
+        raise Exception('Vnešeno uporabniško ime ali geslo je napačno.')
+    cur.close()
         
 def dodaj_uporabnika(uporabnisko_ime, geslo):
     '''V bazo dodamo uporabnika, to pomeni njegovo uporabniško ime in zakodirano geslo'''
@@ -174,4 +200,4 @@ def dodaj_komentar(komentar, uporabnisko_ime):
         
 
     
-baza = sqlite3.connect(datoteka_baze, isolation_level = None)
+baza = sqlite3.connect(datoteka_baze, isolation_level = None, detect_types=sqlite3.PARSE_DECLTYPES)
